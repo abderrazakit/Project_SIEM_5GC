@@ -9,10 +9,10 @@ from datetime import datetime
 
 # --- CONFIGURATION DU PROJET ---
 # L'adresse du backend Spring Boot d'Abdellah
-BACKEND_URL = "http://192.168.1.128:8080/api/logs"
+BACKEND_URL = "http://localhost:8080/api/logs"
 
 # Liste des conteneurs à surveiller (Network Functions)
-TARGET_CONTAINERS = ["free5gc-amf", "free5gc-ausf", "free5gc-smf", "free5gc-nrf"]
+TARGET_CONTAINERS = ["amf", "ausf", "smf", "nrf"]
 
 # Configuration UERANSIM (Chemins validés lors du Sprint 0)
 UERANSIM_CONTAINER = "ueransim"

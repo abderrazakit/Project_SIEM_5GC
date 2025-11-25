@@ -11,8 +11,8 @@ from datetime import datetime
 # L'adresse du backend Spring Boot d'Abdellah
 
 
-BACKEND_URL = "http://10.61.234.131:8080/api/logs"
-
+BACKEND_URL = "http://your address ip :8080/api/logs"
+ #lancer Ip config sur cmd ! 
 
 # Liste des conteneurs à surveiller (Network Functions)
 TARGET_CONTAINERS = ["amf", "ausf", "smf", "nrf"]

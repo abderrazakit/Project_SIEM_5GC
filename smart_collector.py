@@ -1,171 +1,195 @@
 import docker
 import requests
-import json
 import re
 import threading
 import time
 import sys
+import os
+import subprocess
 from datetime import datetime
 
-# --- CONFIGURATION DU PROJET ---
-# L'adresse du backend Spring Boot d'Abdellah
+# ==========================================
+# ⚙️ CONFIGURATION DU PROJET
+# ==========================================
 
+# 1. Backend Spring Boot
+BACKEND_URL = "http://100.101.36.244:8080/api/logs"
 
-BACKEND_URL = "http://10.61.234.131:8080/api/logs"
+# 2. Infrastructure
+# Chemin absolu vers ton docker-compose
+COMPOSE_FILE_PATH = os.path.expanduser("~/free5gc-compose/docker-compose.yaml")
+COMPOSE_PROJECT_DIR = os.path.dirname(COMPOSE_FILE_PATH)
 
+# 3. Cibles Monitoring
+TARGET_CONTAINERS = ["amf", "ausf", "smf", "nrf", "udm"]
 
-# Liste des conteneurs à surveiller (Network Functions)
-TARGET_CONTAINERS = ["amf", "ausf", "smf", "nrf"]
-
-# Configuration UERANSIM (Chemins validés lors du Sprint 0)
+# 4. Simulation UERANSIM (CORRECTION DES NOMS DE FICHIERS ICI)
 UERANSIM_CONTAINER = "ueransim"
-GNB_CMD = "/ueransim/nr-gnb -c ./config/free5gc-gnb.yaml"
-UE_CMD = "/ueransim/nr-ue -c ./config/free5gc-ue.yaml"
+# On utilise les noms exacts trouvés par ton 'ls' : gnbcfg.yaml et uecfg.yaml
+GNB_CMD = "./nr-gnb -c config/gnbcfg.yaml"
+UE_CMD = "./nr-ue -c config/uecfg.yaml"
 
-# Connexion au démon Docker local
-try:
-    client = docker.from_env()
-except Exception as e:
-    print(f"❌ Erreur critique: Impossible de se connecter à Docker. {e}")
-    sys.exit(1)
 
-# --- 1. MODULE DE PARSING (REGEX) ---
-def parse_log_line(container_name, raw_line):
-    """
-    Transforme une ligne de log brute free5GC en dictionnaire structuré.
-    Format typique: 2025-11-23T10:00:00Z [INFO][AMF][Main] Message...
-    """
-    # Nettoyage de la ligne (décodage bytes -> string)
+# ==========================================
+# 🏗️ MODULE 1 : INFRASTRUCTURE
+# ==========================================
+def start_infrastructure():
+    print("🏗️  Démarrage de l'infrastructure free5GC...")
+    
+    if not os.path.exists(COMPOSE_FILE_PATH):
+        print(f"❌ ERREUR: Fichier introuvable : {COMPOSE_FILE_PATH}")
+        sys.exit(1)
+
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", "docker-compose.yaml", "up", "-d"], 
+            cwd=COMPOSE_PROJECT_DIR,
+            check=True
+        )
+        print("✅ Docker Compose OK. Attente stabilisation (20s)...")
+        time.sleep(20) 
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Erreur démarrage infra: {e}")
+        sys.exit(1)
+
+
+# ==========================================
+# 🧹 MODULE 2 : PARSING
+# ==========================================
+def remove_ansi_colors(text):
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
+
+def parse_and_send(container_name, raw_line):
     if isinstance(raw_line, bytes):
-        line = raw_line.decode('utf-8', errors='ignore').strip()
+        line_str = raw_line.decode('utf-8', errors='ignore').strip()
     else:
-        line = raw_line.strip()
+        line_str = raw_line.strip()
+    
+    clean_message = remove_ansi_colors(line_str)
+    if not clean_message: return
 
-    if not line:
-        return None
+    pattern = r"^(\S+)\s+\[([A-Z]+)\]\[([a-zA-Z0-9]+)\](?:\[(.*?)\])?\s+(.*)"
+    match = re.match(pattern, clean_message)
 
-    # Regex pour capturer: Timestamp, Level, Module, et le Message
-    # Exemple pattern: 2023-01-01... [INFO][AMF] ...
-    pattern = r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.*Z)\s+\[([A-Z]+)\]\[([A-Za-z0-9]+)\](?:\s*\[.*?\])?\s+(.*)$"
-    match = re.match(pattern, line)
-
-    log_entry = {
-        "timestamp": datetime.now().isoformat(), # Fallback timestamp
-        "nf_name": container_name, # Ex: free5gc-amf
-        "level": "UNKNOWN",
-        "component": "UNKNOWN",
-        "message": line, # Message brut par défaut
-        "event_type": "LOG", # Par défaut
-        "status": "INFO"
+    log_payload = {
+        "timestamp": datetime.now().isoformat(),
+        "nfName": container_name,
+        "level": "INFO",
+        "component": "SYSTEM",
+        "message": clean_message
     }
 
     if match:
-        log_entry["timestamp"] = match.group(1)
-        log_entry["level"] = match.group(2)      # Ex: INFO, ERRO
-        log_entry["component"] = match.group(3)  # Ex: AMF, NGAP
-        log_entry["message"] = match.group(4)    # Le reste du message
+        log_payload["timestamp"] = match.group(1)
+        log_payload["level"] = match.group(2)
+        log_payload["component"] = match.group(3)
+        log_payload["message"] = match.group(5)
 
-        # Analyse sémantique simple pour aider le Sprint 2 (IDS)
-        msg_lower = log_entry["message"].lower()
-        if "error" in msg_lower or "fail" in msg_lower or "reject" in msg_lower:
-            log_entry["status"] = "FAILURE"
-            log_entry["event_type"] = "SECURITY_ALERT" if "auth" in msg_lower else "ERROR"
-        elif "success" in msg_lower or "accepted" in msg_lower:
-            log_entry["status"] = "SUCCESS"
-            log_entry["event_type"] = "TRANSACTION"
-
-    return log_entry
-
-# --- 2. MODULE DE COMMUNICATION BACKEND ---
-def send_to_springboot(log_data):
-    """Envoie le log JSON vers l'API Spring Boot"""
     try:
-        headers = {'Content-Type': 'application/json'}
-        # On envoie en mode 'fire and forget' pour ne pas ralentir le parsing, 
-        # mais idéalement on gérerait une queue.
-        response = requests.post(BACKEND_URL, json=log_data, timeout=2)
-        if response.status_code != 200:
-            print(f"⚠️ Backend refusé ({response.status_code})")
-    except requests.exceptions.ConnectionError:
-        # On n'affiche pas l'erreur à chaque ligne pour ne pas spammer si le backend est éteint
-        pass 
-    except Exception as e:
-        print(f"⚠️ Erreur d'envoi: {e}")
+        requests.post(BACKEND_URL, json=log_payload, timeout=0.5)
+    except Exception:
+        pass
 
-# --- 3. MODULE DE MONITORING (THREADS) ---
-def monitor_container(container_name):
-    """Fonction exécutée dans un thread séparé pour chaque conteneur"""
-    print(f"🎧 Démarrage de l'écoute sur {container_name}...")
+
+# ==========================================
+# 🎧 MODULE 3 : MONITORING
+# ==========================================
+try:
+    client = docker.from_env()
+except Exception:
+    print("❌ Erreur Docker. Vérifie que Docker tourne.")
+    sys.exit(1)
+
+def monitor(name):
+    print(f"🎧 Écoute active: {name}")
     try:
-        container = client.containers.get(container_name)
-        # stream=True permet de lire en temps réel (comme tail -f)
+        container = client.containers.get(name)
         for line in container.logs(stream=True, follow=True, tail=0):
-            parsed_log = parse_log_line(container_name, line)
-            if parsed_log:
-                # Affichage local pour debug
-                print(f"[{container_name}] {parsed_log['message'][:50]}...") 
-                # Envoi vers Abdellah
-                send_to_springboot(parsed_log)
-    except docker.errors.NotFound:
-        print(f"❌ Conteneur {container_name} introuvable (est-il lancé ?)")
-    except Exception as e:
-        print(f"❌ Arrêt monitoring {container_name}: {e}")
+            parse_and_send(name, line)
+    except Exception:
+        print(f"⚠️  Arrêt écoute {name}")
 
-# --- 4. MODULE DE SIMULATION (CONTROL PLANE) ---
+
+# ==========================================
+# 🚀 MODULE 4 : SIMULATION (CORRIGÉ & ROBUSTE)
+# ==========================================
 def launch_simulation():
-    """Pilote le conteneur UERANSIM pour lancer gNB et UE"""
-    print("\n🚀 --- DÉBUT DE LA SÉQUENCE DE SIMULATION 5G ---")
+    print("\n🚀 --- LANCEMENT AUTOMATIQUE DE LA SIMULATION ---")
     
     try:
-        ueransim = client.containers.get(UERANSIM_CONTAINER)
+        container = client.containers.get(UERANSIM_CONTAINER)
         
-        # Étape 1 : Nettoyage (au cas où)
-        print("🧹 Nettoyage des anciens processus gNB/UE...")
-        ueransim.exec_run("killall -9 nr-gnb nr-ue")
+        # 1. Nettoyage
+        print("🧹 Kill des anciens processus...")
+        container.exec_run("bash -c 'pkill -9 nr-gnb || true'")
+        container.exec_run("bash -c 'pkill -9 nr-ue || true'")
         time.sleep(2)
 
-        # Étape 2 : Lancement du gNB (Antenne)
-        print(f"📡 Lancement du gNodeB (Antenne)...")
-        # detach=True est CRUCIAL pour ne pas bloquer le script Python
-        # On lance la commande en background dans le conteneur
-        cmd_gnb = f"bash -c '{GNB_CMD} > /var/log/gnb.log 2>&1 &'"
-        ueransim.exec_run(cmd_gnb, detach=True)
+        # 2. Démarrage gNB
+        print(f"📡 Démarrage gNB (config/gnbcfg.yaml)...")
+        # On force le dossier /ueransim pour que le chemin relatif 'config/...' fonctionne
+        cmd_gnb_full = f"bash -c 'cd /ueransim && nohup {GNB_CMD} > /var/log/gnb.log 2>&1 &'"
+        container.exec_run(cmd_gnb_full, detach=True)
         
-        print("⏳ Attente de l'initialisation de l'antenne (5s)...")
-        time.sleep(5) # Laisser le temps au SCTP de monter
+        print("⏳ Initialisation antenne (15s)...")
+        time.sleep(15)
 
-        # Étape 3 : Lancement de l'UE (Utilisateur)
-        print(f"📱 Lancement de l'User Equipment (Smartphone)...")
-        cmd_ue = f"bash -c '{UE_CMD} > /var/log/ue.log 2>&1 &'"
-        ueransim.exec_run(cmd_ue, detach=True)
+        # 3. Démarrage UE
+        print(f"📱 Connexion UE (config/uecfg.yaml)...")
+        cmd_ue_full = f"bash -c 'cd /ueransim && nohup {UE_CMD} > /var/log/ue.log 2>&1 &'"
+        container.exec_run(cmd_ue_full, detach=True)
+        
+        print("⏳ Enregistrement réseau (10s)...")
+        time.sleep(10)
 
-        print("✅ Simulation lancée ! Les logs devraient arriver...")
+        # 4. Debug Logs (Vérification immédiate)
+        print("🔍 Vérification du démarrage UE...")
+        check_ue = container.exec_run("tail -n 5 /var/log/ue.log")
+        log_output = check_ue.output.decode('utf-8').strip()
+        print(f"--- LOG UE (Extrait) ---\n{log_output}\n------------------------")
 
+        # 5. Test Ping
+        print("\n📶 TEST PING (uesimtun0)...")
+        ping_cmd = "ping -I uesimtun0 -c 3 google.com"
+        exit_code, output = container.exec_run(ping_cmd)
+        
+        print("--- SORTIE PING ---")
+        print(output.decode('utf-8'))
+        print("-------------------")
+
+        if exit_code == 0:
+            print("✅ SUCCÈS : Connexion 5G établie ! Le SIEM reçoit des logs valides.")
+        else:
+            print("❌ ÉCHEC :")
+            if "No such device" in output.decode('utf-8'):
+                print("👉 L'interface uesimtun0 n'existe pas. L'UE a crashé ou a été rejeté par l'AMF.")
+            else:
+                print("👉 Problème de routage ou DNS.")
+
+    except docker.errors.NotFound:
+        print(f"❌ Erreur: Conteneur {UERANSIM_CONTAINER} introuvable.")
     except Exception as e:
-        print(f"❌ Erreur lors de la simulation: {e}")
+        print(f"❌ Erreur Simulation: {e}")
 
-# --- MAIN ---
+
+# ==========================================
+# 🏁 MAIN
+# ==========================================
 if __name__ == "__main__":
-    print("🔒 5G Security IDS - Log Collector & Simulator Agent")
-    print("==================================================")
+    print("🤖 SIEM 5G ORCHESTRATOR v3.0 (Fix Config Paths)")
+    
+    start_infrastructure()
 
-    # 1. Lancer les écouteurs de logs (Threads)
-    threads = []
+    print("🔌 Démarrage des capteurs...")
     for target in TARGET_CONTAINERS:
-        t = threading.Thread(target=monitor_container, args=(target,))
-        t.daemon = True # Le thread mourra quand le script principal s'arrête
-        t.start()
-        threads.append(t)
+        threading.Thread(target=monitor, args=(target,), daemon=True).start()
 
-    # 2. Attendre un peu que les écouteurs soient prêts
     time.sleep(2)
-
-    # 3. Déclencher la simulation
     launch_simulation()
 
-    # 4. Maintenir le script en vie
+    print("\n✅ Script en cours d'exécution (Ctrl+C pour quitter)...")
     try:
-        while True:
-            time.sleep(1)
+        while True: time.sleep(1)
     except KeyboardInterrupt:
-        print("\n🛑 Arrêt du collecteur.")
+        print("👋 Bye.")

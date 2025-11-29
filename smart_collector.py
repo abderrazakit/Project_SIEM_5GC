@@ -16,22 +16,21 @@ from datetime import datetime
 BACKEND_URL = "http://10.61.234.131:8080/api/logs"
 
 # 2. Infrastructure
-# Chemin absolu vers ton docker-compose   /home/aazdag/Bureau/free5gc-compose
+# Chemin absolu vers ton docker-compose
 COMPOSE_FILE_PATH = os.path.expanduser("/home/aazdag/Bureau/free5gc-compose/docker-compose.yaml")
 COMPOSE_PROJECT_DIR = os.path.dirname(COMPOSE_FILE_PATH)
 
 # 3. Cibles Monitoring
 TARGET_CONTAINERS = ["amf", "ausf", "smf", "nrf", "udm"]
 
-# 4. Simulation UERANSIM (CORRECTION DES NOMS DE FICHIERS ICI)
+# 4. Simulation UERANSIM
 UERANSIM_CONTAINER = "ueransim"
-# On utilise les noms exacts trouvés par ton 'ls' : gnbcfg.yaml et uecfg.yaml
 GNB_CMD = "./nr-gnb -c config/gnbcfg.yaml"
 UE_CMD = "./nr-ue -c config/uecfg.yaml"
 
 
 # ==========================================
-# 🏗️ MODULE 1 : INFRASTRUCTURE
+# 🏗️ MODULE 1 : INFRASTRUCTURE (START & STOP)
 # ==========================================
 def start_infrastructure():
     print("🏗️  Démarrage de l'infrastructure free5GC...")
@@ -52,6 +51,30 @@ def start_infrastructure():
         print(f"❌ Erreur démarrage infra: {e}")
         sys.exit(1)
 
+def stop_infrastructure():
+    """Arrête proprement les conteneurs Docker"""
+    print("\n🛑 ARRÊT DE L'INFRASTRUCTURE EN COURS...")
+    print("⏳ Veuillez patienter, suppression des conteneurs...")
+    
+    try:
+        subprocess.run(
+            ["docker", "compose", "-f", "docker-compose.yaml", "down"], 
+            cwd=COMPOSE_PROJECT_DIR,
+            check=True
+        )
+        print("✅ Infrastructure arrêtée avec succès.")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️ Erreur lors de l'arrêt: {e}")
+
+def stop_simulation():
+    """Arrête les processus internes de UERANSIM"""
+    print("🛑 Arrêt de la simulation (UE/gNB)...")
+    try:
+        container = client.containers.get(UERANSIM_CONTAINER)
+        container.exec_run("bash -c 'pkill -9 nr-ue || true'")
+        container.exec_run("bash -c 'pkill -9 nr-gnb || true'")
+    except:
+        pass # Pas grave si le conteneur est déjà éteint
 
 # ==========================================
 # 🧹 MODULE 2 : PARSING
@@ -105,14 +128,16 @@ def monitor(name):
     print(f"🎧 Écoute active: {name}")
     try:
         container = client.containers.get(name)
+        # On ajoute un check pour éviter les erreurs lors de l'arrêt
         for line in container.logs(stream=True, follow=True, tail=0):
             parse_and_send(name, line)
     except Exception:
-        print(f"⚠️  Arrêt écoute {name}")
+        # On ne print rien ici pour éviter le spam lors de l'arrêt
+        pass
 
 
 # ==========================================
-# 🚀 MODULE 4 : SIMULATION (CORRIGÉ & ROBUSTE)
+# 🚀 MODULE 4 : SIMULATION
 # ==========================================
 def launch_simulation():
     print("\n🚀 --- LANCEMENT AUTOMATIQUE DE LA SIMULATION ---")
@@ -120,15 +145,12 @@ def launch_simulation():
     try:
         container = client.containers.get(UERANSIM_CONTAINER)
         
-        # 1. Nettoyage
-        print("🧹 Kill des anciens processus...")
-        container.exec_run("bash -c 'pkill -9 nr-gnb || true'")
-        container.exec_run("bash -c 'pkill -9 nr-ue || true'")
+        # 1. Nettoyage initial
+        stop_simulation()
         time.sleep(2)
 
         # 2. Démarrage gNB
         print(f"📡 Démarrage gNB (config/gnbcfg.yaml)...")
-        # On force le dossier /ueransim pour que le chemin relatif 'config/...' fonctionne
         cmd_gnb_full = f"bash -c 'cd /ueransim && nohup {GNB_CMD} > /var/log/gnb.log 2>&1 &'"
         container.exec_run(cmd_gnb_full, detach=True)
         
@@ -143,7 +165,7 @@ def launch_simulation():
         print("⏳ Enregistrement réseau (10s)...")
         time.sleep(10)
 
-        # 4. Debug Logs (Vérification immédiate)
+        # 4. Debug Logs
         print("🔍 Vérification du démarrage UE...")
         check_ue = container.exec_run("tail -n 5 /var/log/ue.log")
         log_output = check_ue.output.decode('utf-8').strip()
@@ -161,11 +183,7 @@ def launch_simulation():
         if exit_code == 0:
             print("✅ SUCCÈS : Connexion 5G établie ! Le SIEM reçoit des logs valides.")
         else:
-            print("❌ ÉCHEC :")
-            if "No such device" in output.decode('utf-8'):
-                print("👉 L'interface uesimtun0 n'existe pas. L'UE a crashé ou a été rejeté par l'AMF.")
-            else:
-                print("👉 Problème de routage ou DNS.")
+            print("❌ ÉCHEC : Interface uesimtun0 non active ou problème DNS.")
 
     except docker.errors.NotFound:
         print(f"❌ Erreur: Conteneur {UERANSIM_CONTAINER} introuvable.")
@@ -177,19 +195,36 @@ def launch_simulation():
 # 🏁 MAIN
 # ==========================================
 if __name__ == "__main__":
-    print("🤖 SIEM 5G ORCHESTRATOR v3.0 (Fix Config Paths)")
+    print("🤖 SIEM 5G ORCHESTRATOR v3.1 (Auto-Stop)")
     
+    # 1. Démarrer
     start_infrastructure()
 
+    # 2. Monitorer
     print("🔌 Démarrage des capteurs...")
     for target in TARGET_CONTAINERS:
-        threading.Thread(target=monitor, args=(target,), daemon=True).start()
+        t = threading.Thread(target=monitor, args=(target,), daemon=True)
+        t.start()
 
     time.sleep(2)
+    
+    # 3. Simuler
     launch_simulation()
 
-    print("\n✅ Script en cours d'exécution (Ctrl+C pour quitter)...")
+    print("\n✅ Script en cours d'exécution (Ctrl+C pour ARRÊTER et nettoyer)...")
+    
+    # 4. Boucle principale avec gestion d'arrêt
     try:
-        while True: time.sleep(1)
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("👋 Bye.")
+        print("\n\n👋 Signal d'arrêt reçu (Ctrl+C) !")
+        
+        # Arrêt Simulation
+        stop_simulation()
+        
+        # Arrêt Infrastructure
+        stop_infrastructure()
+        
+        print("🏁 Programme terminé proprement.")
+        sys.exit(0)

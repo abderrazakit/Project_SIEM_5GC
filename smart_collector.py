@@ -16,8 +16,8 @@ from datetime import datetime
 BACKEND_URL = "http://10.61.234.131:8080/api/logs"
 
 # 2. Infrastructure
-# Chemin absolu vers ton docker-compose
-COMPOSE_FILE_PATH = os.path.expanduser("~/free5gc-compose/docker-compose.yaml")
+# Chemin absolu vers ton docker-compose   /home/aazdag/Bureau/Project_SIEM_5GC
+COMPOSE_FILE_PATH = os.path.expanduser("/home/aazdag/Bureau/Project_SIEM_5GC/docker-compose.yaml")
 COMPOSE_PROJECT_DIR = os.path.dirname(COMPOSE_FILE_PATH)
 
 # 3. Cibles Monitoring

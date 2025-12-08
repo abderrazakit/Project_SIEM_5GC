@@ -8,7 +8,7 @@ from datetime import datetime
 # Remplacez par l'IP de votre backend Spring Boot (comme dans smart_collector.py)
 # Si vous testez tout en local : http://localhost:8080/api/logs
 # Si c'est sur la VM : http://10.61.234.131:8080/api/logs
-API_URL = "http://192.168.146.1:8080/api/logs" 
+API_URL = "http://192.168.1.233:8080/api/logs" 
 
 def send_log(payload):
     """Envoie un log simulé au Backend"""

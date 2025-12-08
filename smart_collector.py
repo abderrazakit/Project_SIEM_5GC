@@ -15,6 +15,7 @@ from datetime import datetime
 # 1. Backend Spring Boot
 BACKEND_URL = "http://192.168.1.233:8080/api/logs"
 
+
 # 2. Infrastructure
 # Chemin absolu vers ton docker-compose
 COMPOSE_FILE_PATH = os.path.expanduser("/home/aazdag/Bureau/free5gc-compose/docker-compose.yaml")
@@ -22,6 +23,7 @@ COMPOSE_PROJECT_DIR = os.path.dirname(COMPOSE_FILE_PATH)
 
 # 3. Cibles Monitoring
 TARGET_CONTAINERS = ["amf", "ausf", "smf", "nrf", "udm"]
+
 
 # 4. Simulation UERANSIM
 UERANSIM_CONTAINER = "ueransim"

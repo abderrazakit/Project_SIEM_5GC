@@ -12,16 +12,20 @@ from datetime import datetime
 # ⚙️ CONFIGURATION DU PROJET
 # ==========================================
 
-# 1. Backend Spring Boot
-BACKEND_URL = "http://192.168.1.237:8080/api/logs"
+# 1. Backend Spring Boot (Ton IP Windows)
+BACKEND_URL = "http://172.28.54.163:8080/api/logs"
 
 # 2. Infrastructure
-# Chemin absolu vers ton docker-compose
+# Chemin absolu vers le dossier contenant les fichiers docker-compose
 COMPOSE_FILE_PATH = os.path.expanduser("/home/ubuntuhj/free5gc-compose/docker-compose.yaml")
 COMPOSE_PROJECT_DIR = os.path.dirname(COMPOSE_FILE_PATH)
 
 # 3. Cibles Monitoring
-TARGET_CONTAINERS = ["amf", "ausf", "smf", "nrf", "udm"]
+TARGET_CONTAINERS = [
+    "amf", "ausf", "smf", "nrf", "udm", 
+    "pcf", "nssf", "nef", "chf", "tngf", 
+    "n3iwf", "upf", "webui"
+]
 
 # 4. Simulation UERANSIM
 UERANSIM_CONTAINER = "ueransim"
@@ -33,36 +37,47 @@ UE_CMD = "./nr-ue -c config/uecfg.yaml"
 # 🏗️ MODULE 1 : INFRASTRUCTURE (START & STOP)
 # ==========================================
 def start_infrastructure():
-    print("🏗️  Démarrage de l'infrastructure free5GC...")
+    print("🏗️  Démarrage de l'infrastructure free5GC + Prometheus...")
     
     if not os.path.exists(COMPOSE_FILE_PATH):
         print(f"❌ ERREUR: Fichier introuvable : {COMPOSE_FILE_PATH}")
         sys.exit(1)
 
     try:
-        subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.yaml", "up", "-d"], 
-            cwd=COMPOSE_PROJECT_DIR,
-            check=True
-        )
-        print("✅ Docker Compose OK. Attente stabilisation (20s)...")
-        time.sleep(20) 
+        # ON CHARGE LES DEUX FICHIERS : Core 5G + Monitoring
+        cmd = [
+            "docker", "compose", 
+            "-f", "docker-compose.yaml", 
+            "-f", "docker-compose-prometheus.yaml", # <--- AJOUT ICI
+            "up", "-d"
+        ]
+        
+        subprocess.run(cmd, cwd=COMPOSE_PROJECT_DIR, check=True)
+        
+        print("✅ Docker Compose (5G + Metrics) OK. Attente stabilisation (30s)...")
+        time.sleep(30) # On laisse un peu plus de temps pour Prometheus/Grafana
+        
     except subprocess.CalledProcessError as e:
         print(f"❌ Erreur démarrage infra: {e}")
         sys.exit(1)
 
 def stop_infrastructure():
-    """Arrête proprement les conteneurs Docker"""
+    """Arrête proprement tous les conteneurs"""
     print("\n🛑 ARRÊT DE L'INFRASTRUCTURE EN COURS...")
     print("⏳ Veuillez patienter, suppression des conteneurs...")
     
     try:
-        subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.yaml", "down"], 
-            cwd=COMPOSE_PROJECT_DIR,
-            check=True
-        )
+        # ON ÉTEINT TOUT PROPREMENT
+        cmd = [
+            "docker", "compose", 
+            "-f", "docker-compose.yaml", 
+            "-f", "docker-compose-prometheus.yaml", 
+            "down"
+        ]
+        
+        subprocess.run(cmd, cwd=COMPOSE_PROJECT_DIR, check=True)
         print("✅ Infrastructure arrêtée avec succès.")
+        
     except subprocess.CalledProcessError as e:
         print(f"⚠️ Erreur lors de l'arrêt: {e}")
 
@@ -74,7 +89,7 @@ def stop_simulation():
         container.exec_run("bash -c 'pkill -9 nr-ue || true'")
         container.exec_run("bash -c 'pkill -9 nr-gnb || true'")
     except:
-        pass # Pas grave si le conteneur est déjà éteint
+        pass 
 
 # ==========================================
 # 🧹 MODULE 2 : PARSING
@@ -92,9 +107,11 @@ def parse_and_send(container_name, raw_line):
     clean_message = remove_ansi_colors(line_str)
     if not clean_message: return
 
+    # Regex standard free5GC
     pattern = r"^(\S+)\s+\[([A-Z]+)\]\[([a-zA-Z0-9]+)\](?:\[(.*?)\])?\s+(.*)"
     match = re.match(pattern, clean_message)
 
+    # Structure JSON conforme au Backend Java
     log_payload = {
         "timestamp": datetime.now().isoformat(),
         "nfName": container_name,
@@ -128,11 +145,9 @@ def monitor(name):
     print(f"🎧 Écoute active: {name}")
     try:
         container = client.containers.get(name)
-        # On ajoute un check pour éviter les erreurs lors de l'arrêt
         for line in container.logs(stream=True, follow=True, tail=0):
             parse_and_send(name, line)
     except Exception:
-        # On ne print rien ici pour éviter le spam lors de l'arrêt
         pass
 
 
@@ -151,6 +166,7 @@ def launch_simulation():
 
         # 2. Démarrage gNB
         print(f"📡 Démarrage gNB (config/gnbcfg.yaml)...")
+        # On force le dossier de travail avec cd /ueransim
         cmd_gnb_full = f"bash -c 'cd /ueransim && nohup {GNB_CMD} > /var/log/gnb.log 2>&1 &'"
         container.exec_run(cmd_gnb_full, detach=True)
         
@@ -195,7 +211,7 @@ def launch_simulation():
 # 🏁 MAIN
 # ==========================================
 if __name__ == "__main__":
-    print("🤖 SIEM 5G ORCHESTRATOR v3.1 (Auto-Stop)")
+    print("🤖 SIEM 5G ORCHESTRATOR v4.0 (Prometheus Enabled)")
     
     # 1. Démarrer
     start_infrastructure()
@@ -211,7 +227,10 @@ if __name__ == "__main__":
     # 3. Simuler
     launch_simulation()
 
-    print("\n✅ Script en cours d'exécution (Ctrl+C pour ARRÊTER et nettoyer)...")
+    print("\n✅ Système en cours d'exécution...")
+    print("👉 Grafana est accessible sur : http://localhost:3000 (admin/admin)")
+    print("👉 Prometheus est accessible sur : http://localhost:9090")
+    print("👉 Appuie sur Ctrl+C pour TOUT ARRÊTER proprement.")
     
     # 4. Boucle principale avec gestion d'arrêt
     try:
@@ -219,12 +238,7 @@ if __name__ == "__main__":
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n\n👋 Signal d'arrêt reçu (Ctrl+C) !")
-        
-        # Arrêt Simulation
         stop_simulation()
-        
-        # Arrêt Infrastructure
         stop_infrastructure()
-        
         print("🏁 Programme terminé proprement.")
         sys.exit(0)

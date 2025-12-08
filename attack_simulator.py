@@ -102,7 +102,7 @@ def sim_rogue_nf():
     print("\n🏴‍☠️ SCÉNARIO 6 : Rogue Network Function")
     log = generate_log(
         "hacker_device_01", # Nom qui n'est pas dans la liste blanche
-        "INFO", 
+        "WARN", 
         "Scanner", 
         "Scanning network ports for open vulnerabilities..."
     )

@@ -13,7 +13,7 @@ from datetime import datetime
 # ==========================================
 
 # 1. Backend Spring Boot
-BACKEND_URL = "http://10.61.234.131:8080/api/logs"
+BACKEND_URL = "http://192.168.146.1:8080/api/logs"
 
 # 2. Infrastructure
 # Chemin absolu vers ton docker-compose

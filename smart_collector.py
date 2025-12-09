@@ -13,11 +13,11 @@ from datetime import datetime
 # ==========================================
 
 # 1. Backend Spring Boot (Ton IP Windows)
-BACKEND_URL = "http://172.28.54.163:8080/api/logs"
+BACKEND_URL = "http://10.244.196.131:8080/api/logs"
 
 # 2. Infrastructure
 # Chemin absolu vers le dossier contenant les fichiers docker-compose
-COMPOSE_FILE_PATH = os.path.expanduser("/home/ubuntuhj/free5gc-compose/docker-compose.yaml")
+COMPOSE_FILE_PATH = os.path.expanduser("/home/aazdag/Bureau/free5gc-compose/docker-compose.yaml")
 COMPOSE_PROJECT_DIR = os.path.dirname(COMPOSE_FILE_PATH)
 
 # 3. Cibles Monitoring
@@ -48,7 +48,7 @@ def start_infrastructure():
         cmd = [
             "docker", "compose", 
             "-f", "docker-compose.yaml", 
-            "-f", "docker-compose-prometheus.yaml", # <--- AJOUT ICI
+            "-f", "docker-compose-prometheus.yaml", 
             "up", "-d"
         ]
         
@@ -228,8 +228,8 @@ if __name__ == "__main__":
     launch_simulation()
 
     print("\n✅ Système en cours d'exécution...")
-    print("👉 Grafana est accessible sur : http://localhost:3000 (admin/admin)")
-    print("👉 Prometheus est accessible sur : http://localhost:9090")
+    print("👉 Grafana est accessible sur : http://localhost:3001 (admin/admin)")
+    print("👉 Prometheus est accessible sur : http://localhost:9091")
     print("👉 Appuie sur Ctrl+C pour TOUT ARRÊTER proprement.")
     
     # 4. Boucle principale avec gestion d'arrêt

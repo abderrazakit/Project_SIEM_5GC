@@ -8,7 +8,7 @@ from datetime import datetime
 # ⚙️ CONFIGURATION
 # ==========================================
 # Adresse de ton Backend Spring Boot (Windows) vue depuis la VM Ubuntu
-API_URL = "http://172.28.54.163:8080/api/logs" 
+API_URL = "http://10.244.196.131:8080/api/logs" 
 
 def send_log(payload):
     """Envoie le log au Backend et affiche le résultat"""

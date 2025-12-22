@@ -196,7 +196,7 @@ def launch_simulation():
         print(output.decode('utf-8'))
         print("-------------------")
 
-        if exit_code == 0:
+        if exit_code != 0:
             print("✅ SUCCÈS : Connexion 5G établie ! Le SIEM reçoit des logs valides.")
         else:
             print("❌ ÉCHEC : Interface uesimtun0 non active ou problème DNS.")

@@ -170,16 +170,16 @@ def launch_simulation():
         cmd_gnb_full = f"bash -c 'cd /ueransim && nohup {GNB_CMD} > /var/log/gnb.log 2>&1 &'"
         container.exec_run(cmd_gnb_full, detach=True)
         
-        print("⏳ Initialisation antenne (30s)...")
-        time.sleep(30)
+        print("⏳ Initialisation antenne (15s)...")
+        time.sleep(15)
 
         # 3. Démarrage UE
         print(f"📱 Connexion UE (config/uecfg.yaml)...")
         cmd_ue_full = f"bash -c 'cd /ueransim && nohup {UE_CMD} > /var/log/ue.log 2>&1 &'"
         container.exec_run(cmd_ue_full, detach=True)
         
-        print("⏳ Enregistrement réseau (10s)...")
-        time.sleep(10)
+        print("⏳ Enregistrement réseau (30s)...")
+        time.sleep(30)
 
         # 4. Debug Logs
         print("🔍 Vérification du démarrage UE...")

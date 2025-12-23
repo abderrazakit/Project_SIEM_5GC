@@ -51,38 +51,32 @@ def start_infrastructure():
             "-f", "docker-compose-prometheus.yaml", 
             "up", "-d"
         ]
-        
+
         subprocess.run(cmd, cwd=COMPOSE_PROJECT_DIR, check=True)
-        
+
         print("✅ Docker Compose (5G + Metrics) OK. Attente stabilisation (30s)...")
-        time.sleep(30) # On laisse un peu plus de temps pour Prometheus/Grafana
+        time.sleep(30)
         
     except subprocess.CalledProcessError as e:
         print(f"❌ Erreur démarrage infra: {e}")
         sys.exit(1)
 
 def stop_infrastructure():
-    """Arrête proprement tous les conteneurs"""
     print("\n🛑 ARRÊT DE L'INFRASTRUCTURE EN COURS...")
     print("⏳ Veuillez patienter, suppression des conteneurs...")
-    
     try:
-        # ON ÉTEINT TOUT PROPREMENT
         cmd = [
             "docker", "compose", 
             "-f", "docker-compose.yaml", 
             "-f", "docker-compose-prometheus.yaml", 
             "down"
         ]
-        
         subprocess.run(cmd, cwd=COMPOSE_PROJECT_DIR, check=True)
         print("✅ Infrastructure arrêtée avec succès.")
-        
     except subprocess.CalledProcessError as e:
         print(f"⚠️ Erreur lors de l'arrêt: {e}")
 
 def stop_simulation():
-    """Arrête les processus internes de UERANSIM"""
     print("🛑 Arrêt de la simulation (UE/gNB)...")
     try:
         container = client.containers.get(UERANSIM_CONTAINER)
@@ -107,11 +101,9 @@ def parse_and_send(container_name, raw_line):
     clean_message = remove_ansi_colors(line_str)
     if not clean_message: return
 
-    # Regex standard free5GC
     pattern = r"^(\S+)\s+\[([A-Z]+)\]\[([a-zA-Z0-9]+)\](?:\[(.*?)\])?\s+(.*)"
     match = re.match(pattern, clean_message)
 
-    # Structure JSON conforme au Backend Java
     log_payload = {
         "timestamp": datetime.now().isoformat(),
         "nfName": container_name,
@@ -131,7 +123,6 @@ def parse_and_send(container_name, raw_line):
     except Exception:
         pass
 
-
 # ==========================================
 # 🎧 MODULE 3 : MONITORING
 # ==========================================
@@ -150,10 +141,35 @@ def monitor(name):
     except Exception:
         pass
 
+# ==========================================
+# 🚀 MODULE 4 : SIMULATION 
+# ==========================================
+def wait_for_interface(container, interface_name, timeout=60):
+    """Attend que l'interface réseau (uesimtun0) soit créée"""
+    print(f"🕵️  En attente de l'interface {interface_name} (Max {timeout}s)...")
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        # On liste les interfaces IP dans le conteneur
+        res = container.exec_run("ip link show")
+        output = res.output.decode('utf-8')
+        
+        if interface_name in output:
+            print(f"✅ Interface {interface_name} détectée !")
+            return True
+        
+        # Vérification si le processus a crashé entre temps
+        proc_check = container.exec_run("pgrep -f nr-ue")
+        if proc_check.exit_code != 0:
+            print("❌ Le processus nr-ue semble s'être arrêté prématurément.")
+            return False
+            
+        time.sleep(2)
+        print(".", end="", flush=True) # Indicateur visuel d'attente
+        
+    print(f"\n❌ Timeout : L'interface {interface_name} n'est jamais apparue.")
+    return False
 
-# ==========================================
-# 🚀 MODULE 4 : SIMULATION
-# ==========================================
 def launch_simulation():
     print("\n🚀 --- LANCEMENT AUTOMATIQUE DE LA SIMULATION ---")
     
@@ -165,30 +181,31 @@ def launch_simulation():
         time.sleep(2)
 
         # 2. Démarrage gNB
-        print(f"📡 Démarrage gNB (config/gnbcfg.yaml)...")
-        # On force le dossier de travail avec cd /ueransim
+        print(f"📡 Démarrage gNB...")
         cmd_gnb_full = f"bash -c 'cd /ueransim && nohup {GNB_CMD} > /var/log/gnb.log 2>&1 &'"
         container.exec_run(cmd_gnb_full, detach=True)
         
-        print("⏳ Initialisation antenne (15s)...")
-        time.sleep(15)
+        print("⏳ Initialisation antenne (10s)...")
+        time.sleep(10)
 
         # 3. Démarrage UE
-        print(f"📱 Connexion UE (config/uecfg.yaml)...")
+        print(f"📱 Connexion UE...")
         cmd_ue_full = f"bash -c 'cd /ueransim && nohup {UE_CMD} > /var/log/ue.log 2>&1 &'"
         container.exec_run(cmd_ue_full, detach=True)
         
-        print("⏳ Enregistrement réseau (30s)...")
-        time.sleep(30)
-
-        # 4. Debug Logs
-        print("🔍 Vérification du démarrage UE...")
-        check_ue = container.exec_run("tail -n 5 /var/log/ue.log")
-        log_output = check_ue.output.decode('utf-8').strip()
-        print(f"--- LOG UE (Extrait) ---\n{log_output}\n------------------------")
+        # 4. Attente intelligente de l'interface uesimtun0
+        if not wait_for_interface(container, "uesimtun0", timeout=60):
+            # Si échec, on affiche les logs pour comprendre pourquoi
+            print("\n🔍 --- DEBUG LOGS UE (Dernières lignes) ---")
+            logs = container.exec_run("tail -n 20 /var/log/ue.log")
+            print(logs.output.decode('utf-8'))
+            print("------------------------------------------")
+            return # On arrête là si pas d'interface
 
         # 5. Test Ping
         print("\n📶 TEST PING (uesimtun0)...")
+        # On attend encore 2s pour être sûr que le routing est up
+        time.sleep(2) 
         ping_cmd = "ping -I uesimtun0 -c 3 google.com"
         exit_code, output = container.exec_run(ping_cmd)
         
@@ -196,49 +213,41 @@ def launch_simulation():
         print(output.decode('utf-8'))
         print("-------------------")
 
-        if exit_code != 0:
+        if exit_code == 0:
             print("✅ SUCCÈS : Connexion 5G établie ! Le SIEM reçoit des logs valides.")
         else:
-            print("❌ ÉCHEC : Interface uesimtun0 non active ou problème DNS.")
+            print("❌ ÉCHEC DU PING : Interface active mais pas d'accès internet (DNS ou Routing).")
 
     except docker.errors.NotFound:
         print(f"❌ Erreur: Conteneur {UERANSIM_CONTAINER} introuvable.")
     except Exception as e:
         print(f"❌ Erreur Simulation: {e}")
 
-
 # ==========================================
 # 🏁 MAIN
 # ==========================================
 if __name__ == "__main__":
-    print("🤖 SIEM 5G ORCHESTRATOR v4.0 (Prometheus Enabled)")
+    print("🤖 SIEM 5G ORCHESTRATOR v4.1 (Fix Ping)")
     
-    # 1. Démarrer
     start_infrastructure()
 
-    # 2. Monitorer
     print("🔌 Démarrage des capteurs...")
     for target in TARGET_CONTAINERS:
         t = threading.Thread(target=monitor, args=(target,), daemon=True)
         t.start()
 
     time.sleep(2)
-    
-    # 3. Simuler
     launch_simulation()
 
     print("\n✅ Système en cours d'exécution...")
-    print("👉 Grafana est accessible sur : http://localhost:3001 (admin/admin)")
-    print("👉 Prometheus est accessible sur : http://localhost:9091")
-    print("👉 Appuie sur Ctrl+C pour TOUT ARRÊTER proprement.")
+    print("👉 Grafana : http://localhost:3001")
+    print("👉 Appuie sur Ctrl+C pour quitter.")
     
-    # 4. Boucle principale avec gestion d'arrêt
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n\n👋 Signal d'arrêt reçu (Ctrl+C) !")
+        print("\n👋 Arrêt...")
         stop_simulation()
         stop_infrastructure()
-        print("🏁 Programme terminé proprement.")
         sys.exit(0)

@@ -192,7 +192,7 @@ def launch_simulation():
         print(f"📱 Connexion UE...")
         cmd_ue_full = f"bash -c 'cd /ueransim && nohup {UE_CMD} > /var/log/ue.log 2>&1 &'"
         container.exec_run(cmd_ue_full, detach=True)
-        """
+        
         # 4. Attente intelligente de l'interface uesimtun0
         if not wait_for_interface(container, "uesimtun0", timeout=60):
             # Si échec, on affiche les logs pour comprendre pourquoi
@@ -201,9 +201,7 @@ def launch_simulation():
             print(logs.output.decode('utf-8'))
             print("------------------------------------------")
             return # On arrête là si pas d'interface
-            """
-        print("wait for 50s")
-        time.sleep(50)
+       
         # 5. Test Ping
         print("\n📶 TEST PING (uesimtun0)...")
         # On attend encore 2s pour être sûr que le routing est up

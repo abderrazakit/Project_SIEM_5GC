@@ -202,6 +202,8 @@ def launch_simulation():
             print("------------------------------------------")
             return # On arrête là si pas d'interface
             """
+        print("wait for 50s")
+        time.sleep(50)
         # 5. Test Ping
         print("\n📶 TEST PING (uesimtun0)...")
         # On attend encore 2s pour être sûr que le routing est up
